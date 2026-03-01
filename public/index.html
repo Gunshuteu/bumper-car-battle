@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bumper-Car Battle</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #0a0a0a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            color: white;
+        }
+        
+        #menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+        }
+        
+        h1 {
+            font-size: 3em;
+            margin-bottom: 20px;
+            text-shadow: 0 0 20px #FF00FF, 0 0 40px #00FFFF;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+        
+        .neon-input {
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00FFFF;
+            color: #00FFFF;
+            padding: 15px 25px;
+            font-size: 1.2em;
+            border-radius: 8px;
+            margin: 10px;
+            outline: none;
+            text-align: center;
+            text-transform: uppercase;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+        
+        .neon-input:focus {
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
+        }
+        
+        .neon-button {
+            background: linear-gradient(45deg, #FF00FF, #00FFFF);
+            border: none;
+            color: white;
+            padding: 15px 40px;
+            font-size: 1.2em;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 20px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(255, 0, 255, 0.4);
+        }
+        
+        .neon-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(255, 0, 255, 0.6);
+        }
+        
+        .neon-button:active {
+            transform: translateY(0);
+        }
+        
+        #gameContainer {
+            display: none;
+            position: relative;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0a 100%);
+            box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.8);
+        }
+        
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            min-width: 200px;
+        }
+        
+        #ui h3 {
+            margin-bottom: 10px;
+            color: #00FFFF;
+            text-transform: uppercase;
+            font-size: 0.9em;
+            letter-spacing: 1px;
+        }
+        
+        .score-entry {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        
+        .controls-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+        
+        .key {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin: 0 2px;
+            font-weight: bold;
+            color: white;
+        }
+        
+        #connectionStatus {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        
+        .connected { background: #39FF14; color: #000; }
+        .disconnected { background: #FF073A; color: white; }
+    </style>
+</head>
+<body>
+    <div id="menu">
+        <h1>🔥 BUMPER-CAR BATTLE 🔥</h1>
+        <p style="margin-bottom: 20px; color: #aaa;">Knock your friends into the lasers!</p>
+        <input type="text" id="roomInput" class="neon-input" placeholder="ROOM NAME" maxlength="10">
+        <br>
+        <button id="joinBtn" class="neon-button">JOIN BATTLE</button>
+    </div>
+    
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <h3>🏆 Scoreboard</h3>
+            <div id="scores"></div>
+        </div>
+        <div id="connectionStatus" class="disconnected">Connecting...</div>
+        <div class="controls-hint">
+            Move with <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> • Push enemies into lasers!
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Game Configuration
+        const CONFIG = {
+            SERVER_URL: window.location.origin, // Auto-detect server URL
+            INTERPOLATION_DELAY: 100, // ms - buffer for smooth interpolation
+            PREDICTION_ENABLED: true,
+            CANVAS_WIDTH: 1200,
+            CANVAS_HEIGHT: 800
+        };
+
+        // Game State
+        const state = {
+            socket: null,
+            myId: null,
+            room: null,
+            players: {}, // Visual/interpolated positions
+            serverPlayers: {}, // Authoritative positions from server
+            lasers: [],
+            scores: {},
+            input: { w: false, a: false, s: false, d: false },
+            lastInputSeq: 0,
+            pendingInputs: [], // For reconciliation
+            connected: false,
+            canvas: null,
+            ctx: null
+        };
+
+        // DOM Elements
+        const menu = document.getElementById('menu');
+        const gameContainer = document.getElementById('gameContainer');
+        const roomInput = document.getElementById('roomInput');
+        const joinBtn = document.getElementById('joinBtn');
+        const canvas = document.getElementById('gameCanvas');
+        const scoresDiv = document.getElementById('scores');
+        const statusDiv = document.getElementById('connectionStatus');
+
+        // Initialize Canvas
+        function initCanvas() {
+            canvas.width = CONFIG.CANVAS_WIDTH;
+            canvas.height = CONFIG.CANVAS_HEIGHT;
+            state.canvas = canvas;
+            state.ctx = canvas.getContext('2d');
+            
+            // Scale canvas to fit window while maintaining aspect ratio
+            function resize() {
+                const scale = Math.min(
+                    window.innerWidth / CONFIG.CANVAS_WIDTH,
+                    window.innerHeight / CONFIG.CANVAS_HEIGHT
+                ) * 0.95;
+                
+                canvas.style.width = (CONFIG.CANVAS_WIDTH * scale) + 'px';
+                canvas.style.height = (CONFIG.CANVAS_HEIGHT * scale) + 'px';
+            }
+            window.addEventListener('resize', resize);
+            resize();
+        }
+
+        // Linear interpolation
+        function lerp(start, end, t) {
+            return start + (end - start) * t;
+        }
+
+        // Vector interpolation for positions
+        function lerpPosition(current, target, delta) {
+            return {
+                x: lerp(current.x, target.x, delta),
+                y: lerp(current.y, target.y, delta)
+            };
+        }
+
+        // Initialize Socket Connection
+        function initSocket() {
+            state.socket = io(CONFIG.SERVER_URL, {
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                reconnectionAttempts: 5
+            });
+
+            state.socket.on('connect', () => {
+                console.log('Connected to server');
+                statusDiv.textContent = 'Connected';
+                statusDiv.className = 'connected';
+                state.connected = true;
+            });
+
+            state.socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+                statusDiv.textContent = 'Disconnected';
+                statusDiv.className = 'disconnected';
+                state.connected = false;
+            });
+
+            state.socket.on('init', (data) => {
+                state.myId = data.id;
+                
+                // Initialize local player representations
+                Object.keys(data.players).forEach(id => {
+                    const p = data.players[id];
+                    state.players[id] = {
+                        id: p.id,
+                        x: p.x,
+                        y: p.y,
+                        vx: 0,
+                        vy: 0,
+                        targetX: p.x,
+                        targetY: p.y,
+                        color: p.color,
+                        name: p.name,
+                        radius: p.radius,
+                        lastUpdate: Date.now()
+                    };
+                    state.serverPlayers[id] = { ...p };
+                });
+                
+                state.lasers = data.lasers || [];
+                CONFIG.CANVAS_WIDTH = data.canvasWidth;
+                CONFIG.CANVAS_HEIGHT = data.canvasHeight;
+                
+                initCanvas();
+                menu.style.display = 'none';
+                gameContainer.style.display = 'block';
+                
+                gameLoop();
+            });
+
+            state.socket.on('gameState', (data) => {
+                const now = Date.now();
+                const serverTime = data.timestamp;
+                
+                // Update authoritative server positions
+                Object.keys(data.players).forEach(id => {
+                    const serverPlayer = data.players[id];
+                    
+                    if (!state.players[id]) {
+                        // New player joined
+                        state.players[id] = {
+                            id: serverPlayer.id,
+                            x: serverPlayer.x,
+                            y: serverPlayer.y,
+                            vx: 0,
+                            vy: 0,
+                            targetX: serverPlayer.x,
+                            targetY: serverPlayer.y,
+                            color: serverPlayer.color,
+                            name: serverPlayer.name,
+                            radius: serverPlayer.radius,
+                            lastUpdate: now
+                        };
+                        state.serverPlayers[id] = { ...serverPlayer };
+                    } else {
+                        // Update target positions for interpolation
+                        state.players[id].targetX = serverPlayer.x;
+                        state.players[id].targetY = serverPlayer.y;
+                        state.players[id].vx = serverPlayer.vx;
+                        state.players[id].vy = serverPlayer.vy;
+                        state.players[id].lastUpdate = now;
+                        
+                        // Store server state
+                        state.serverPlayers[id] = { ...serverPlayer };
+                    }
+                });
+                
+                // Remove disconnected players
+                Object.keys(state.players).forEach(id => {
+                    if (!data.players[id]) {
+                        delete state.players[id];
+                        delete state.serverPlayers[id];
+                    }
+                });
+                
+                // Update lasers
+                state.lasers = data.lasers || [];
+                
+                // Update scores
+                state.scores = data.scores || {};
+                updateScoreboard();
+            });
+
+            state.socket.on('playerJoined', (player) => {
+                if (!state.players[player.id]) {
+                    state.players[player.id] = {
+                        id: player.id,
+                        x: player.x,
+                        y: player.y,
+                        vx: 0,
+                        vy: 0,
+                        targetX: player.x,
+                        targetY: player.y,
+                        color: player.color,
+                        name: player.name,
+                        radius: player.radius,
+                        lastUpdate: Date.now()
+                    };
+                    state.serverPlayers[player.id] = { ...player };
+                }
+            });
+
+            state.socket.on('playerLeft', (id) => {
+                delete state.players[id];
+                delete state.serverPlayers[id];
+            });
+
+            state.socket.on('playerRespawn', (data) => {
+                if (state.players[data.id]) {
+                    state.players[data.id].x = data.x;
+                    state.players[data.id].y = data.y;
+                    state.players[data.id].targetX = data.x;
+                    state.players[data.id].targetY = data.y;
+                    state.players[data.id].vx = 0;
+                    state.players[data.id].vy = 0;
+                }
+                
+                // Create respawn effect
+                createParticles(data.x, data.y, '#FFFFFF', 20);
+            });
+
+            state.socket.on('scoreUpdate', (data) => {
+                // Visual feedback for scoring
+                if (state.players[data.victim]) {
+                    createParticles(
+                        state.players[data.victim].x, 
+                        state.players[data.victim].y, 
+                        '#FF073A', 
+                        30
+                    );
+                }
+            });
+        }
+
+        // Particle system for visual effects
+        let particles = [];
+        function createParticles(x, y, color, count) {
+            for (let i = 0; i < count; i++) {
+                const angle = (Math.PI * 2 * i) / count;
+                const speed = 2 + Math.random() * 4;
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    life: 1.0,
+                    color: color,
+                    size: 3 + Math.random() * 5
+                });
+            }
+        }
+
+        function updateParticles() {
+            particles = particles.filter(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                p.size *= 0.95;
+                return p.life > 0;
+            });
+        }
+
+        function drawParticles(ctx) {
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+        }
+
+        // Input handling
+        function setupInput() {
+            window.addEventListener('keydown', (e) => {
+                const key = e.key.toLowerCase();
+                if (state.input.hasOwnProperty(key)) {
+                    state.input[key] = true;
+                    e.preventDefault();
+                }
+            });
+
+            window.addEventListener('keyup', (e) => {
+                const key = e.key.toLowerCase();
+                if (state.input.hasOwnProperty(key)) {
+                    state.input[key] = false;
+                    e.preventDefault();
+                }
+            });
+        }
+
+        // Send input to server
+        function sendInput() {
+            if (!state.connected || !state.myId) return;
+            
+            state.lastInputSeq++;
+            state.socket.emit('move', {
+                ...state.input,
+                seq: state.lastInputSeq,
+                timestamp: Date.now()
+            });
+        }
+
+        // Client-side prediction for local player
+        function predictLocalPlayer() {
+            if (!state.myId || !state.players[state.myId]) return;
+            
+            const player = state.players[state.myId];
+            const accel = 0.8;
+            const friction = 0.92;
+            const maxSpeed = 6;
+            
+            // Apply input to velocity
+            if (state.input.w) player.vy -= accel;
+            if (state.input.s) player.vy += accel;
+            if (state.input.a) player.vx -= accel;
+            if (state.input.d) player.vx += accel;
+            
+            // Apply friction
+            player.vx *= friction;
+            player.vy *= friction;
+            
+            // Cap speed
+            const speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+            if (speed > maxSpeed) {
+                player.vx = (player.vx / speed) * maxSpeed;
+                player.vy = (player.vy / speed) * maxSpeed;
+            }
+            
+            // Update position
+            player.x += player.vx;
+            player.y += player.vy;
+            
+            // Boundary check
+            const radius = player.radius;
+            if (player.x < radius) { player.x = radius; player.vx *= -0.5; }
+            if (player.x > CONFIG.CANVAS_WIDTH - radius) { 
+                player.x = CONFIG.CANVAS_WIDTH - radius; 
+                player.vx *= -0.5; 
+            }
+            if (player.y < radius) { player.y = radius; player.vy *= -0.5; }
+            if (player.y > CONFIG.CANVAS_HEIGHT - radius) { 
+                player.y = CONFIG.CANVAS_HEIGHT - radius; 
+                player.vy *= -0.5; 
+            }
+        }
+
+        // Interpolate other players
+        function interpolatePlayers() {
+            const now = Date.now();
+            const interpolationRate = 0.3; // Adjust for smoothness vs responsiveness
+            
+            Object.keys(state.players).forEach(id => {
+                if (id === state.myId) return; // Don't interpolate local player (we predict)
+                
+                const player = state.players[id];
+                
+                // Interpolate towards target position from server
+                player.x = lerp(player.x, player.targetX, interpolationRate);
+                player.y = lerp(player.y, player.targetY, interpolationRate);
+            });
+        }
+
+        // Render game
+        function render() {
+            const ctx = state.ctx;
+            
+            // Clear canvas with trail effect
+            ctx.fillStyle = 'rgba(10, 10, 10, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw grid
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.05)';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < CONFIG.CANVAS_WIDTH; x += 50) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, CONFIG.CANVAS_HEIGHT);
+                ctx.stroke();
+            }
+            for (let y = 0; y < CONFIG.CANVAS_HEIGHT; y += 50) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(CONFIG.CANVAS_WIDTH, y);
+                ctx.stroke();
+            }
+            
+            // Draw lasers
+            state.lasers.forEach(laser => {
+                if (laser.warning) {
+                    // Warning phase - pulsing outline
+                    const pulse = (Math.sin(Date.now() / 200) + 1) / 2;
+                    ctx.strokeStyle = `rgba(255, 0, 0, ${0.3 + pulse * 0.4})`;
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash([10, 10]);
+                    ctx.strokeRect(laser.x, laser.y, laser.width, laser.height);
+                    ctx.setLineDash([]);
+                    
+                    // Warning text
+                    ctx.fillStyle = `rgba(255, 0, 0, ${0.5 + pulse * 0.5})`;
+                    ctx.font = 'bold 20px Arial';
+                    ctx.textAlign = 'center';
+                    const centerX = laser.x + laser.width / 2;
+                    const centerY = laser.y + laser.height / 2;
+                    ctx.fillText('⚠ LASER INCOMING', centerX, centerY);
+                } else {
+                    // Active laser - deadly glow
+                    const gradient = ctx.createLinearGradient(
+                        laser.x, laser.y, 
+                        laser.x + laser.width, laser.y + laser.height
+                    );
+                    gradient.addColorStop(0, 'rgba(255, 0, 0, 0.9)');
+                    gradient.addColorStop(0.5, 'rgba(255, 100, 100, 1)');
+                    gradient.addColorStop(1, 'rgba(255, 0, 0, 0.9)');
+                    
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(laser.x, laser.y, laser.width, laser.height);
+                    
+                    // Glow effect
+                    ctx.shadowColor = '#FF0000';
+                    ctx.shadowBlur = 30;
+                    ctx.strokeStyle = '#FF3333';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(laser.x, laser.y, laser.width, laser.height);
+                    ctx.shadowBlur = 0;
+                }
+            });
+            
+            // Draw players
+            Object.values(state.players).forEach(player => {
+                const isMe = player.id === state.myId;
+                
+                // Glow effect
+                ctx.shadowColor = player.color;
+                ctx.shadowBlur = isMe ? 25 : 15;
+                
+                // Player circle
+                ctx.fillStyle = player.color;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Inner highlight
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.beginPath();
+                ctx.arc(player.x - 5, player.y - 5, player.radius * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.shadowBlur = 0;
+                
+                // Player name
+                ctx.fillStyle = 'white';
+                ctx.font = isMe ? 'bold 14px Arial' : '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(player.name + (isMe ? ' (YOU)' : ''), player.x, player.y - player.radius - 10);
+                
+                // Velocity indicator (small line showing direction)
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(player.x, player.y);
+                ctx.lineTo(player.x + player.vx * 5, player.y + player.vy * 5);
+                ctx.stroke();
+            });
+            
+            // Draw particles
+            drawParticles(ctx);
+            
+            // Draw border
+            ctx.strokeStyle = '#00FFFF';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        }
+
+        // Update scoreboard
+        function updateScoreboard() {
+            let html = '';
+            const sortedScores = Object.entries(state.scores)
+                .sort((a, b) => b[1] - a[1]);
+            
+            sortedScores.forEach(([id, score]) => {
+                const player = state.players[id];
+                if (player) {
+                    const isMe = id === state.myId;
+                    html += `
+                        <div class="score-entry" style="background: ${isMe ? 'rgba(0, 255, 255, 0.2)' : 'transparent'}; border-left: 3px solid ${player.color};">
+                            <span>${player.name} ${isMe ? '👤' : ''}</span>
+                            <span style="font-weight: bold; color: ${player.color};">${score}</span>
+                        </div>
+                    `;
+                }
+            });
+            
+            if (sortedScores.length === 0) {
+                html = '<div style="color: #666; font-style: italic;">Waiting for players...</div>';
+            }
+            
+            scoresDiv.innerHTML = html;
+        }
+
+        // Main game loop
+        let lastTime = 0;
+        function gameLoop(timestamp = 0) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+            
+            // Send input to server
+            sendInput();
+            
+            // Client-side prediction for local player
+            if (CONFIG.PREDICTION_ENABLED) {
+                predictLocalPlayer();
+            }
+            
+            // Interpolate other players
+            interpolatePlayers();
+            
+            // Update particles
+            updateParticles();
+            
+            // Render
+            render();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Join button handler
+        joinBtn.addEventListener('click', () => {
+            const room = roomInput.value.trim().toUpperCase();
+            if (room.length < 2) {
+                alert('Please enter a room name (at least 2 characters)');
+                return;
+            }
+            
+            state.room = room;
+            initSocket();
+            
+            setTimeout(() => {
+                if (state.connected) {
+                    state.socket.emit('join', room);
+                } else {
+                    alert('Failed to connect to server. Please try again.');
+                }
+            }, 500);
+        });
+
+        // Enter key to join
+        roomInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') joinBtn.click();
+        });
+
+        // Setup input
+        setupInput();
+
+        // Focus room input on load
+        roomInput.focus();
+    </script>
+</body>
+</html>
